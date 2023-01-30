@@ -21,9 +21,9 @@
 #define K 16
 
 // GEMM configuration.
-#define M_TILES 256
-#define N_TILES 256
-#define K_TILES 256
+#define M_TILES 16
+#define N_TILES 16
+#define K_TILES 16
 
 #define M_TOTAL (M * M_TILES)
 #define N_TOTAL (N * N_TILES)
@@ -49,13 +49,13 @@ void InitMatrix(float * A, float *B, half *Ah, half *Bh, float *C)
 
 
 // Tensor core
-__global__ void WMMAF16TensorCore(half *A, half *B, float *C, float *D)
+__global__ void WMMAF16TensorCore(__half *A, __half *B, float *C, float *D)
 {
 	int ix = (blockIdx.x * blockDim.x + threadIdx.x) / WARP_SIZE;
 	int iy = (blockIdx.y * blockDim.y + threadIdx.y);
 
-	wmma::fragment<wmma::matrix_a, M, N, K, half, wmma::row_major> a_frag;
-	wmma::fragment<wmma::matrix_b, M, N, K, half, wmma::col_major> b_frag;
+	wmma::fragment<wmma::matrix_a, M, N, K, __half, wmma::row_major> a_frag;
+	wmma::fragment<wmma::matrix_b, M, N, K, __half, wmma::row_major> b_frag;
 	wmma::fragment<wmma::accumulator, M, N, K, float> ab_frag;
 	wmma::fragment<wmma::accumulator, M, N, K, float> c_frag;
 
@@ -64,14 +64,14 @@ __global__ void WMMAF16TensorCore(half *A, half *B, float *C, float *D)
 	// AB = A*B
 	int a_col, a_row, b_col, b_row, c_col, c_row;
 	a_row = ix * M;
-	b_row = iy * N;
+	b_col = iy * N;
 	for (int k = 0; k<K_TOTAL; k += K) {
-		a_col = b_col = k;
+		a_col = b_row = k;
 
 		if (a_row < M_TOTAL && a_col < K_TOTAL && b_row < K_TOTAL && b_col < N_TOTAL) {
 			// Load the inputs
-			wmma::load_matrix_sync(a_frag, A + a_col + a_row * M_TOTAL, M_TOTAL);
-			wmma::load_matrix_sync(b_frag, B + b_col + b_col * K_TOTAL, K_TOTAL);
+			wmma::load_matrix_sync(a_frag, A + a_col + a_row * K_TOTAL, K_TOTAL);
+			wmma::load_matrix_sync(b_frag, B + b_col + b_row * N_TOTAL, N_TOTAL);
 
 			// Perform the matrix multiplication
 			wmma::mma_sync(ab_frag, a_frag, b_frag, ab_frag);
@@ -79,7 +79,7 @@ __global__ void WMMAF16TensorCore(half *A, half *B, float *C, float *D)
 	}
 
 	// D = AB + C
-	c_col = b_row;
+	c_col = b_col;
 	c_row = a_row;
 	if (c_row < M_TOTAL && c_col < N_TOTAL) {
 		wmma::load_matrix_sync(c_frag, C + c_col + c_row * N_TOTAL, N_TOTAL, wmma::mem_row_major);
